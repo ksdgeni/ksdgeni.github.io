@@ -1,0 +1,202 @@
+
+output: html_document
+---
+
+```{r}
+suppressMessages({
+  library(tableplot)
+  library(dplyr)
+  library(stringr)
+  library(caret)
+  library(randomForest)
+  library(stringr)
+  library(corrgram)
+  library(sos) #findFn()
+  library(doParallel)  # ????ó???? 
+})
+
+rm(list=ls())
+Sys.setenv(LANGUAGE='en')
+registerDoParallel(cores=6)
+
+```
+
+
+
+```{r}
+r435 <- read.table("r435.csv", header=T, sep=",")
+#tableplot(r435)  #Error in dim(values) <- c(rows, cols, 1) : dims [product 85212] do not match the length of object [12]
+summary(r435)
+str(r435) 
+```
+
+
+```{r}
+corrgram.vars <- c("power", "setTemp","rootTemp")
+corrgram.data <- r435
+corrgram(corrgram.data[,corrgram.vars], order=FALSE, 
+         lower.panel=panel.conf, upper.panel=panel.pie, 
+         text.panel=panel.txt, main="GCIC Data correlogram")
+```
+Factor???? ?????? ?м? ????��?
+
+
+
+```{r}
+r435$addr = factor(r435$addr)
+```
+
+???? ?????? ?и? 
+```{r}
+#?? , ??, ??, ??ȯ 
+r435$date <- as.character(r435$date)
+r435$month <- as.integer(str_sub(r435$date, 6,7))
+r435$day <- as.integer(str_sub(r435$date, 9,10 ))
+r435$Day <- str_sub(r435$date, 1,10 ) 
+r435$Day <-as.Date(r435$Day, "%Y-%m-%d" )
+r435$week <- weekdays(r435$Day)
+r435$time <- str_sub(r435$date, 12,16 )
+r435$hour <- as.integer(str_sub(r435$time, 1,2))
+r435$min <- as.integer(str_sub(r435$time, 4,5))  
+str(r435)
+```
+
+?????? ???? ?? ��?? 
+```{r}
+r435 <- r435[which(r435$month != 2), ] #2?? ��?? 
+r435 <- r435[which(r435$hour>=8 & r435$hour<=18), ] #?????? ��??  
+r435 <- r435[which(r435$week != "?ݿ???" & r435$week != "??????" & r435$week != "?Ͽ???"),]
+```
+
+
+?ð?ǥ ?Է? ???? ??��?? 1, ??��?? 0 
+```{r}
+r435$lecture[(r435$week =="??????") & (r435$hour == 16) & (r435$min >=10) & (r435$min <=50) ]  <- 15
+r435$lecture[(r435$week =="ȭ????") & (r435$hour >=10) & (r435$hour <=11)& (r435$min >=10) & (r435$min <=50) ]  <- 15 
+r435$lecture[(r435$week =="ȭ????") & (r435$hour == 15)  & (r435$min >=10) & (r435$min <=50) ]  <- 15
+r435$lecture[(r435$week =="??????") & (r435$hour >=10) & (r435$hour <=11)& (r435$min >=10) & (r435$min <=50) ]  <- 15
+r435$lecture[(r435$week =="??????") & (r435$hour >=14) & (r435$hour <=16)& (r435$min >=10) & (r435$min <=50) ]  <- 15 
+r435$lecture[(r435$week =="??????") & (r435$hour >=10) & (r435$hour <=15)& (r435$min >=10) & (r435$min <=50) ]  <- 15 
+r435$lecture[is.na(r435$lecture)] = 5 #r435$lecture <- sub("NULL","0",r435$lecture)
+r435$lecture <- factor(r435$lecture, levels=c(5,15),labels=c("free","class"))
+```
+
+
+```{r}
+r435<- select(r435, -(month:min))  
+r435<- select(r435, -setTemp)  
+r435<- select(r435, -date) 
+str(r435)
+```
+
+
+????ġ ?˻? 
+```{r}
+sum(is.na(r435))
+```
+
+sample ?? ???߱?(?ٿ? ???ø?)
+```{r}
+table(r435$lecture)
+downsample <- downSample(r435, r435$lecture)  #lecture?? factor??��?? ??ȯ ?ʿ?
+table(downsample$lecture)
+```
+
+Train & Test ?????? ?з? 
+```{r}
+parts <- createDataPartition(downsample$lecture, p=0.7, list=F)
+train_data <- downsample[parts,]
+test_data <- downsample[-parts,]
+```
+
+ 
+caret ??Ű?? ???? ??????????Ʈ ???? 
+```{r}
+m <- train(lecture ~ rootTemp, data = train_data, 
+           method='rf', 
+           #preProcess=c("pca"),
+            trContol=trainControl(method="repeatedcv", number=10, repeats=3, summaryFunction = twoClassSummary), #Ʃ?? ???? 1: ?ڵ? 
+           #tuneGrid=expand.grid(mtry=c(3,4)), #Ʃ?? ???? 2 :??�� ??��
+           #metric = "ROC" #accuracy:?з? ??��, RMSE:ȸ?͹?��, kappa:  low percentage of samples in one class
+           verbose = F
+           )
+``` 
+* mtry error, random?ϰ? ????ٰ? ?߻??ϴ? ?翬?? ?��??
+
+```{r}
+m
+```
+��Ȯ?? 65%
+
+
+??????_?????? Ȯ?? ?ʿ? 
+```{r}
+#m$finalModel
+#fit <- fitted(m)
+#prediction <- predict(m, newdata=test_data)
+#table(prediction, test_data$lecture)
+#confusionMatrix(prediction, test_data$lecture)
+#is_correct <- ifelse(fit>.5,1,0) == as.numeric(downsample$lecture) -1
+#sum(is_correct)
+#sum(is_correct)/NROW(is_correct)  #
+#head(downsample)
+#head(fit)
+```
+
+
+
+
+#randomForest??Ű?? ???? ??????????Ʈ ???? 
+```{r}
+m <- randomForest(lecture~ rootTemp, data=train_data, importance=T)  # importance ?ɼǻ??? 
+m
+
+```
+��Ȯ?? 66.4%
+
+```{r}
+predict_m = predict(m, test_data)
+table(predict_m, test_data$Class)
+
+plot(m)
+plot(margin(m, test_data$lecture))  #Try to see the margin, positive or negative, if positif it means correct classification
+```
+?׷??��? ?ǹ? ?ϴ°?��?
+
+
+
+```{r}
+importance(m)
+#varImpPlot(m) #ramdomforest ??????
+(t=table(observed=test_data[,'lecture'], predict=predict_m))
+prop.table(t,1)
+```
+
+#sampling ?????? ???? ��Ȯ?? ???? Ȯ?? 
+```{r}
+m.cv <- train(lecture ~ rootTemp, data = train_data, method='rf', trContorl=trainControl(method="cv", number=10, repeats=10)) 
+m.rcv <- train(lecture ~ rootTemp, data = train_data, method='rf', trContorl=trainControl(method="repeatedcv", number=10, repeats=10)) 
+m.loocv <- train(lecture ~ rootTemp, data = train_data, method='rf', trContorl=trainControl(method="LOOCV", number=10, repeats=10)) 
+m.boot <- train(lecture ~ rootTemp, data = train_data, method='rf', trContorl=trainControl(method="boot", number=10, repeats=10)) 
+m.boot632 <- train(lecture ~ rootTemp, data = train_data, method='rf', trContorl=trainControl(method="boot632", number=10, repeats=10)) 
+```
+?????? ???? 74%?? ???? --> ?ǹ? ??�� 
+
+
+#?˰���?? ?????? ???? ��ȭ?? ???? Ȯ?? 
+```{r}
+m.rf <- train(lecture ~ rootTemp, data = train_data, method='rf', trContorl=trainControl(method="repeatedcv", number=10, repeats=10)) 
+m.svm <- train(lecture ~ rootTemp, data = train_data, method='svmRadial', trContorl=trainControl(method="repeatedcv", number=10, repeats=10)) #kernlab ??ġ ?ʿ? 
+result <- resamples(list(LVQ=m.rf, SVM=m.svm))
+summary(result)
+splom(result)
+```
+weka ?????? ��?? ???? 
+
+
+
+#confusionMatrix?̿? ????
+```{r}
+#confusionMatrix(m, test_data$class)
+```
+ 
